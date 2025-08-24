@@ -1,32 +1,68 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:uuid/uuid.dart';
 
 class FirebaseService {
   final FirebaseAuth auth = FirebaseAuth.instance;
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
 
+  // ===================== LOGIN =====================
+
+  /// Login anônimo
   Future<User?> signInAnonymously() async {
     final result = await auth.signInAnonymously();
     return result.user;
   }
 
+  /// Login com Google
+  Future<User?> signInWithGoogle() async {
+    final googleUser = await _googleSignIn.signIn();
+    if (googleUser == null) return null; // usuário cancelou login
+
+    final googleAuth = await googleUser.authentication;
+    final credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+
+    final result = await auth.signInWithCredential(credential);
+    return result.user;
+  }
+
+  /// Logout (funciona tanto para Google quanto Anônimo)
+  Future<void> signOut() async {
+    await auth.signOut();
+    await _googleSignIn.signOut();
+  }
+
+  User? get currentUser => auth.currentUser;
+
+  // ===================== PARTY =====================
+
   Future<String> createParty(String name) async {
-    String id = Uuid().v4();
-    String code = Uuid().v4().substring(0, 6).toUpperCase();
+    String id = const Uuid().v4();
+    String code = const Uuid().v4().substring(0, 6).toUpperCase();
+
     await firestore.collection('parties').doc(id).set({
       'name': name,
       'hostId': auth.currentUser!.uid,
       'code': code,
       'createdAt': FieldValue.serverTimestamp()
     });
-    await addParticipant(id, auth.currentUser!.uid, "Você");
+
+    await addParticipant(id, auth.currentUser!.uid, auth.currentUser?.displayName ?? "Você");
     return id;
   }
 
   Future<String?> joinParty(String code, String userId, String name) async {
-    var query = await firestore.collection('parties').where('code', isEqualTo: code).get();
+    var query = await firestore.collection('parties')
+        .where('code', isEqualTo: code)
+        .get();
+
     if (query.docs.isEmpty) return null;
+
     String partyId = query.docs.first.id;
     await addParticipant(partyId, userId, name);
     return partyId;
@@ -43,8 +79,10 @@ class FirebaseService {
   Future<void> incrementCups(String partyId, String userId) async {
     final doc = firestore.collection('parties').doc(partyId)
         .collection('participants').doc(userId);
+
     final snapshot = await doc.get();
     int cups = snapshot['cups'] ?? 0;
+
     await doc.update({'cups': cups + 1});
   }
 
